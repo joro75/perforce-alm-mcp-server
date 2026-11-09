@@ -1156,6 +1156,72 @@ def get_requirement(
 
 
 @mcp.tool(annotations=_READ_ONLY)
+def get_requirement_by_identifier(identifier: str) -> str:
+    """Get a requirement by internal ID, tag, or requirement number.
+
+    Numeric values are treated as internal record IDs and fetched directly.
+    Other identifiers are resolved through the requirement search endpoint.
+    For a tag such as ``BR-1960`` the numeric suffix is searched first, then
+    the returned tags are compared exactly before the requirement is fetched.
+
+    Args:
+        identifier: Internal numeric ID, full requirement tag (for example
+                    ``BR-1960``), or numeric requirement number.
+    """
+    original = identifier
+    identifier = identifier.strip()
+    if not identifier:
+        return "Error: requirement identifier must not be empty."
+
+    numeric_suffix = identifier.rsplit("-", 1)[-1]
+    if not numeric_suffix.isdigit():
+        return f"Error: invalid requirement identifier '{original}'."
+
+    if identifier.isdigit():
+        try:
+            data = _token_authenticated_request(
+                "GET", _project_path(f"/requirements/{int(identifier)}")
+            )
+        except Exception:
+            # A numeric requirement number may not be the internal record ID;
+            # fall through and resolve it by its tag suffix.
+            pass
+        else:
+            if data.get("error") or data.get("errors"):
+                data = None
+            else:
+                _strip_expanded_attachments(data)
+                return json.dumps(data, indent=2)
+
+    search_body = {"search": f"Tag contains '{numeric_suffix}'", "fields": ["Tag"]}
+    try:
+        data = _token_authenticated_request(
+            "POST", _project_path("/requirements/search"), body=search_body
+        )
+    except Exception as e:
+        return f"Error: {e}"
+
+    matches = [
+        requirement for requirement in data.get("requirements", [])
+        if requirement.get("tag", "") == identifier
+        or requirement.get("tag", "").rsplit("-", 1)[-1] == numeric_suffix
+    ]
+    if not matches:
+        return f"Error: requirement '{original}' was not found."
+    if len(matches) > 1:
+        return f"Error: requirement identifier '{original}' is ambiguous."
+
+    try:
+        result = _token_authenticated_request(
+            "GET", _project_path(f"/requirements/{matches[0]['id']}")
+        )
+    except Exception as e:
+        return f"Error: {e}"
+    _strip_expanded_attachments(result)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool(annotations=_READ_ONLY)
 def get_requirements_by_query(
     filter_id: str = "",
     search: str = "",
